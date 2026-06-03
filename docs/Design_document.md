@@ -68,75 +68,87 @@ Stop
 
 > Architecture diagram is provided in the architecture folder.
 
-The system consists of the following components:
+The enhanced architecture consists of the following components:
 
 ### User
 
-The user submits long URLs and accesses shortened URLs.
+The user interacts with the application through a web-based user interface to create and access shortened URLs.
+
+### UI Layer
+
+The UI layer provides a simple and user-friendly interface where users can:
+
+* Enter a long URL.
+* Generate a shortened URL.
+* View the generated short URL.
+* Access previously generated URLs.
+
+The UI improves usability by eliminating the need for direct API interaction.
 
 ### Application/API Server
 
-The API server receives requests from users and coordinates the URL shortening and redirection processes.
+The API server receives requests from the UI layer and coordinates URL shortening and redirection operations.
 
 ### URL Shortener Service
 
 The core service responsible for:
 
-* Generating hash values.
+* Generating SHA-256 hash values.
 * Creating shortened URLs.
 * Handling URL redirection requests.
+* Managing collision resolution.
+
+### Redis Cache (LRU)
+
+A Redis cache is introduced between the application and database layers.
+
+Frequently accessed URL mappings are stored in memory, allowing faster retrieval without repeatedly querying the database.
+
+The cache uses the Least Recently Used (LRU) eviction policy, which automatically removes the least recently accessed entries when cache capacity is reached.
+
+Advantages of Redis Cache:
+
+* Faster URL lookup.
+* Reduced database load.
+* Improved application performance.
+* Better scalability for high-traffic scenarios.
 
 ### Database
 
 Stores mappings in the format:
 
-```text
-{ short_code : long_url }
-```
+short_code → long_url
 
-The database is used both for storing new mappings and retrieving existing mappings during redirection.
+The database serves as the permanent source of truth for all URL mappings.
 
 ---
 
 # Method of Approach
 
-There were two primary approaches considered for generating short URLs:
+The Tiny URL generation process is based on SHA-256 hashing.
 
-## Option 1: Random String Generation
+When a user submits a long URL, the system first validates the input URL and then applies the SHA-256 hashing algorithm to generate a unique hash value.
 
-Random alphanumeric strings are generated and assigned as short URLs.
+Since the complete SHA-256 hash is too large to be used as a short URL, only a subset of the generated hash is extracted and used as the short code.
 
-### Advantages
+The generated short code is then checked against existing database records to ensure uniqueness.
 
-* Easy to implement.
-* Faster URL generation.
-* No hashing computation required.
+If a collision is detected, additional characters from the hash value are used until a unique short code is obtained.
 
-### Disadvantages
+The final short code is stored together with the original URL in the database and returned to the user as the shortened URL.
 
-* Possibility of generating duplicate short URLs.
-* Requires additional validation checks.
-* Generates a new short URL every time even for the same original URL.
-* Can increase storage requirements due to duplicate mappings.
+### Advantages of the Hash-Based Approach
 
----
+* Deterministic behavior, where the same URL consistently generates the same short code.
+* Simple and straightforward implementation.
+* Easy integration with Python through built-in hashing libraries.
+* Reduced storage overhead for duplicate URL requests.
+* Suitable for learning-oriented and small-to-medium scale implementations.
+* Can be extended in the future to support alternative URL generation strategies if required.
 
-## Option 2: Hash-Based Generation (Selected)
+### Limitation
 
-A cryptographic hash function such as SHA-256 is applied to the original URL, and a subset of the generated hash is used as the short code.
-
-### Advantages
-
-* Deterministic behavior.
-* Same URL consistently generates the same short code.
-* Easy to implement.
-* Lower storage overhead for duplicate URL requests.
-* Suitable for learning-oriented implementation.
-
-### Disadvantages
-
-* Possibility of hash collisions.
-* Requires collision handling mechanisms.
+The primary limitation of this approach is the possibility of hash collisions. However, collisions are extremely rare when using SHA-256 and can be effectively handled using the collision resolution mechanism implemented in the system.
 
 ---
 
@@ -181,6 +193,40 @@ This strategy ensures reliable URL generation while maintaining implementation s
 | long_url    | TEXT        | Original URL         |
 | short_code  | VARCHAR(20) | Generated Short Code |
 | created_at  | TIMESTAMP   | Creation Timestamp   |
+
+---
+
+# Cache Design
+
+The system incorporates Redis as an in-memory caching solution to improve URL retrieval performance.
+
+Whenever a shortened URL is accessed, the system first checks Redis Cache.
+
+### Cache Hit
+
+If the URL mapping exists in Redis, the original URL is immediately returned without querying the database.
+
+### Cache Miss
+
+If the mapping does not exist in Redis, the database is queried. The retrieved mapping is then stored in Redis for future requests.
+
+### Cache Eviction Policy
+
+The cache uses the Least Recently Used (LRU) policy.
+
+When cache capacity is reached, the least recently accessed entries are removed automatically, ensuring that frequently accessed URL mappings remain available in memory.
+
+### Why Redis Was Selected
+
+Redis was selected because it provides:
+
+* Extremely fast read and write operations.
+* Efficient key-value storage.
+* Easy integration with Python applications.
+* Support for LRU-based cache management.
+* Reduced database load for frequently accessed URLs.
+
+This design significantly improves application performance while maintaining simplicity and scalability.
 
 ---
 
